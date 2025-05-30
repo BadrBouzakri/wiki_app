@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+  # Main API Server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=wiki_app
+      - DB_USER=postgres
+      - DB_PASSWORD=wikisecret123
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ELASTIC_HOST=elasticsearch
+      - ELASTIC_PORT=9200
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+    depends_on:
+      - postgres
+      - redis
+      - elasticsearch
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - wiki-network
+
+  # System Monitor Agent
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      - SERVER_URL=http://api:3000
+      - MONITOR_INTERVAL=5000
+    volumes:
+      - /var/log:/host/var/log:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - ${HOME}/.bash_history:/host/home/.bash_history:ro
+      - ${HOME}/.zsh_history:/host/home/.zsh_history:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - wiki-network
+    privileged: true
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: wiki_app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: wikisecret123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - wiki-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - wiki-network
+
+  # Elasticsearch
+  elasticsearch:
+    image: elasticsearch:8.8.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    restart: unless-stopped
+    networks:
+      - wiki-network
+
+  # Frontend (React App)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:3000
+      - REACT_APP_WS_URL=ws://localhost:3000
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - wiki-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+    networks:
+      - wiki-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  elasticsearch_data:
+
+networks:
+  wiki-network:
+    driver: bridge

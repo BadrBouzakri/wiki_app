@@ -1,0 +1,36 @@
+FROM node:18-alpine
+
+# Install system monitoring tools
+RUN apk add --no-cache procps net-tools inotify-tools
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy agent code and utilities
+COPY src/agent/ ./src/agent/
+COPY src/server/utils/ ./src/server/utils/
+COPY .env.example .env
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Create non-root user but with extended privileges for monitoring
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nodejs -u 1001
+RUN chown -R nodejs:nodejs /app
+
+# Switch to nodejs user
+USER nodejs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD pgrep -f "system-monitor.js" > /dev/null || exit 1
+
+# Start the system monitor
+CMD ["node", "src/agent/system-monitor.js"]
